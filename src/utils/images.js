@@ -1,6 +1,6 @@
 // Image helpers extracted from legacy script.js
 
-// Compress a dataURL image so it fits comfortably under chrome.storage.local quota.
+// Compress a dataURL image. Auto-detects transparency to choose PNG vs JPEG.
 export function compressImage(dataUrl, { maxSize = 8 * 1024 * 1024, maxWidth = null, maxHeight = null, quality = 0.85 } = {}) {
     return new Promise((resolve) => {
         const img = new Image();
@@ -10,50 +10,63 @@ export function compressImage(dataUrl, { maxSize = 8 * 1024 * 1024, maxWidth = n
 
             let width = img.width;
             let height = img.height;
-            let currentQuality = quality;
-            let result = null;
 
-            // Initial resize logic if max dimensions are provided
+            // Resize if max dimensions are provided
             if (maxWidth || maxHeight) {
                 const ratio = width / height;
                 if (maxWidth && width > maxWidth) {
                     width = maxWidth;
-                    height = width / ratio;
+                    height = Math.round(width / ratio);
                 }
                 if (maxHeight && height > maxHeight) {
                     height = maxHeight;
-                    width = height * ratio;
+                    width = Math.round(height * ratio);
                 }
             }
 
             canvas.width = width;
             canvas.height = height;
             ctx.drawImage(img, 0, 0, width, height);
-            result = canvas.toDataURL('image/jpeg', currentQuality);
 
-            console.log(`[Compress] Initial size: ${(result.length / 1024 / 1024).toFixed(4)}MB, ${width}x${height}`);
+            // Detect transparency by scanning alpha channel
+            let hasAlpha = false;
+            try {
+                const imageData = ctx.getImageData(0, 0, width, height).data;
+                for (let i = 3; i < imageData.length; i += 4) {
+                    if (imageData[i] < 250) {
+                        hasAlpha = true;
+                        break;
+                    }
+                }
+            } catch { /* tainted canvas, assume opaque */ }
 
-            // Iterative quality reduction if still over size
-            while (result.length > maxSize && currentQuality > 0.3) {
-                currentQuality -= 0.1;
-                result = canvas.toDataURL('image/jpeg', currentQuality);
-                console.log(`[Compress] Quality ${currentQuality.toFixed(2)}: ${(result.length / 1024 / 1024).toFixed(4)}MB`);
+            // Use PNG for transparent images, JPEG for opaque
+            let result;
+            if (hasAlpha) {
+                result = canvas.toDataURL('image/png');
+            } else {
+                result = canvas.toDataURL('image/jpeg', quality);
             }
 
-            // Iterative resize if STRUGGLING to fit size (fallback)
-            while (result.length > maxSize && width > 128) { // Aggressive fallback
+            // Iterative quality reduction for JPEG only (PNG ignores quality param)
+            if (!hasAlpha) {
+                let currentQuality = quality;
+                while (result.length > maxSize && currentQuality > 0.3) {
+                    currentQuality -= 0.1;
+                    result = canvas.toDataURL('image/jpeg', currentQuality);
+                }
+            }
+
+            // Iterative resize fallback if still over size
+            while (result.length > maxSize && width > 64) {
                 width = Math.floor(width * 0.8);
                 height = Math.floor(height * 0.8);
                 canvas.width = width;
                 canvas.height = height;
                 ctx.drawImage(img, 0, 0, width, height);
-                result = canvas.toDataURL('image/jpeg', currentQuality);
-                console.log(`[Compress] Resize fallback ${width}x${height}: ${(result.length / 1024 / 1024).toFixed(4)}MB`);
+                result = hasAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality);
             }
 
-            const originalSize = (dataUrl.length / 1024 / 1024).toFixed(4);
-            const compressedSize = (result.length / 1024 / 1024).toFixed(4);
-            console.log(`[Compress] ✓ Done: ${originalSize}MB → ${compressedSize}MB`);
             resolve(result);
         };
         img.onerror = () => {

@@ -124,82 +124,109 @@ async function applyImageIcon(ctx, iconEl, app, { defaultBg = '#f0f0f0' } = {}) 
         return;
     }
 
-    // Resolve IDB reference
+    // ── Path 1: IDB reference → read from local, display, done ──
     if (url.startsWith('idb://')) {
         const id = url.split('/').pop();
         try {
             const data = await db.get(STORES_CONSTANTS.FAVICONS, id);
             if (data) {
-                if (data instanceof Blob) {
-                    url = URL.createObjectURL(data);
-                } else {
-                    url = data; // Legacy DataURL string
-                }
+                const displayUrl = data instanceof Blob ? URL.createObjectURL(data) : data;
+                _applyIconStyle(iconEl, displayUrl, defaultBg);
             } else {
                 console.warn('[Shortcuts] Missing icon in IDB:', id);
                 applyTextFallback(iconEl, app);
-                return;
             }
         } catch (e) {
             console.error('[Shortcuts] Error loading icon from IDB:', e);
             applyTextFallback(iconEl, app);
-            return;
         }
+        return;
     }
 
+    // ── Path 2: Data URL → display directly, done ──
+    if (url.startsWith('data:')) {
+        _applyIconStyle(iconEl, url, defaultBg);
+        return;
+    }
+
+    // ── Path 3: HTTP URL → fetch once, compress, save to IDB, then display from cache ──
+    if (url.startsWith('http')) {
+        // Show from network temporarily while caching
+        _applyIconStyle(iconEl, url, defaultBg);
+
+        // Skip if already caching this URL
+        if (_iconCacheInFlight.has(url)) return;
+        _iconCacheInFlight.add(url);
+
+        try {
+            // Fetch image via background script proxy (bypasses CORS)
+            let dataUrl = null;
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
+                        type: 'webdav_proxy',
+                        url: url,
+                        method: 'GET',
+                        headers: {},
+                        isBinary: true,
+                        timeout: 10000
+                    }, (resp) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(resp);
+                        }
+                    });
+                });
+                if (response?.success && typeof response.data === 'string' && response.data.startsWith('data:')) {
+                    dataUrl = response.data;
+                }
+            } catch { /* proxy failed, try fallback */ }
+
+            // Fallback: canvas-based conversion (same-origin / CORS-enabled)
+            if (!dataUrl) {
+                const fallback = await convertImageToDataUrl(url);
+                if (fallback && fallback.startsWith('data:')) {
+                    dataUrl = fallback;
+                }
+            }
+
+            // Guard: app.img may have changed while we were fetching (user edited it)
+            if (!dataUrl || app.img !== url) return;
+
+            // Compress/Resize (128px, auto PNG/JPEG)
+            const compressedDataUrl = await compressImage(dataUrl, { maxWidth: 128, quality: 0.8 });
+            const blob = dataURLToBlob(compressedDataUrl);
+            const id = await computeContentHash(blob);
+
+            // Save to IDB
+            await db.set(STORES_CONSTANTS.FAVICONS, id, blob);
+
+            // Update app reference to IDB (subsequent renders will use Path 1)
+            app.img = `idb://favicons/${id}`;
+            app.iconType = app.iconType || 'icon';
+            app.isTransparent = await checkImageTransparency(compressedDataUrl);
+            ctx.actions.saveApps();
+
+            // Update UI immediately with compressed local version
+            _applyIconStyle(iconEl, compressedDataUrl, defaultBg);
+        } finally {
+            _iconCacheInFlight.delete(url);
+        }
+        return;
+    }
+
+    // ── Fallback: unknown scheme, just display ──
+    _applyIconStyle(iconEl, url, defaultBg);
+}
+
+// Helper: apply icon styles to element (eliminates duplication)
+function _applyIconStyle(iconEl, url, defaultBg) {
     iconEl.innerText = '';
     iconEl.style.backgroundImage = `url(${url})`;
     iconEl.style.backgroundSize = 'cover';
     iconEl.style.backgroundPosition = 'center';
-
-    if (url.startsWith('data:')) {
-        iconEl.style.backgroundColor = defaultBg;
-        return;
-    }
-
-    // Render should not require CORS; use a simple probe image for onerror fallback.
     iconEl.style.backgroundColor = defaultBg;
-    const probe = new Image();
-    let finished = false;
-    probe.onload = async () => {
-        if (finished) return;
-        finished = true;
-
-        // Cache to data URL when network is good (best-effort).
-        // Only valid for http/https URLs, not data: or idb:
-        if (url.startsWith('http') && !_iconCacheInFlight.has(url)) {
-            _iconCacheInFlight.add(url);
-            try {
-                const cached = await convertImageToDataUrl(url);
-                if (cached && cached.startsWith('data:') && app.img === url) {
-                    // SAVE TO IDB
-                    // Compress/Resize before saving to save space (128px limit)
-                    const compressedDataUrl = await compressImage(cached, { maxWidth: 128, quality: 0.8 });
-                    const blob = dataURLToBlob(compressedDataUrl);
-
-                    const id = await computeContentHash(blob); // ID is now Hash
-
-                    // Check if already exists? (Get optional but set overwrites same content so safe)
-                    await db.set(STORES_CONSTANTS.FAVICONS, id, blob);
-                    app.img = `idb://favicons/${id}`;
-                    app.iconType = app.iconType || 'icon';
-                    app.isTransparent = await checkImageTransparency(compressedDataUrl);
-                    ctx.actions.saveApps();
-
-                    // Update UI
-                    iconEl.style.backgroundImage = `url(${compressedDataUrl})`;
-                }
-            } finally {
-                _iconCacheInFlight.delete(url);
-            }
-        }
-    };
-    probe.onerror = () => {
-        if (finished) return;
-        finished = true;
-        applyTextFallback(iconEl, app);
-    };
-    probe.src = url;
 }
 
 export function setupShortcutForm(ctx) {
