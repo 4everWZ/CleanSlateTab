@@ -113,7 +113,7 @@ body::after {
     position: relative;
     width: var(--search-width, 60%);
     max-width: 700px;
-    min-width: 300px;
+    min-width: min(100%, 300px);
     margin: 0 auto;
 }
 
@@ -127,7 +127,7 @@ body::after {
     width: 100%;
     height: var(--search-height, 44px);
     max-width: 700px;
-    min-width: 300px;
+    min-width: min(100%, 300px);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
     gap: calc(var(--search-height, 44px) * 0.15);
     border: none;
@@ -306,8 +306,8 @@ body::after {
     /* Fixed height for stable layout */
     height: calc((var(--icon-size, 90px) + 50px + 32px) * var(--grid-rows, 2));
     padding: 20px 0;
-    /* Ensure padding-left centers content based on columns */
-    padding-left: calc((100% - var(--grid-cols, 5) * (var(--icon-size, 90px) + 50px) + 50px) / 2);
+    /* Ensure padding-left centers content based on columns, fallback to 0% if grid is wider than screen */
+    padding-left: max(0px, calc((100% - var(--grid-cols, 5) * (var(--icon-size, 90px) + 50px) + 50px) / 2));
     /* Pagination space reserved outside or by parent min-height */
 }
 

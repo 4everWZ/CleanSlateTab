@@ -8,6 +8,14 @@ function t(key) {
 }
 
 const _iconCacheInFlight = new Set();
+const _objectUrlCache = new Map();
+
+function getCachedObjectUrl(id, blob) {
+    if (!_objectUrlCache.has(id)) {
+        _objectUrlCache.set(id, URL.createObjectURL(blob));
+    }
+    return _objectUrlCache.get(id);
+}
 
 function getTotalPages(ctx) {
     const validApps = ctx.state.allApps.filter(app => app !== null && app !== undefined);
@@ -130,7 +138,7 @@ async function applyImageIcon(ctx, iconEl, app, { defaultBg = '#f0f0f0' } = {}) 
         try {
             const data = await db.get(STORES_CONSTANTS.FAVICONS, id);
             if (data) {
-                const displayUrl = data instanceof Blob ? URL.createObjectURL(data) : data;
+                const displayUrl = data instanceof Blob ? getCachedObjectUrl(id, data) : data;
                 _applyIconStyle(iconEl, displayUrl, defaultBg);
             } else {
                 console.warn('[Shortcuts] Missing icon in IDB:', id);
@@ -540,6 +548,10 @@ export async function addNewShortcut(ctx) {
                 ctx.dom.shortcutForm?.reset();
                 preview?.classList.remove('show');
                 render(ctx);
+                
+                if (finalUrl && finalUrl.startsWith('blob:')) {
+                    URL.revokeObjectURL(finalUrl);
+                }
             });
         };
 
@@ -820,7 +832,7 @@ export function editAppIcon(ctx, index) {
                 const els = document.getElementsByClassName(headerId);
                 let url = '';
                 if (data instanceof Blob) {
-                    url = URL.createObjectURL(data);
+                    url = getCachedObjectUrl(key, data);
                 } else if (typeof data === 'string') {
                     url = data;
                 }
@@ -990,7 +1002,7 @@ export function editAppIcon(ctx, index) {
                 db.get(STORES_CONSTANTS.FAVICONS, key).then(data => {
                     let url = '';
                     if (data instanceof Blob) {
-                        url = URL.createObjectURL(data);
+                        url = getCachedObjectUrl(key, data);
                     } else if (typeof data === 'string') {
                         url = data;
                     }
