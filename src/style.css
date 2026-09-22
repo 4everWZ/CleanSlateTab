@@ -113,6 +113,8 @@ body::after {
 
 /* 搜索框容器 */
 .search-box-wrapper {
+    user-select: none;
+    -webkit-user-select: none;
     position: relative;
     width: var(--search-width, 60%);
     max-width: 700px;
@@ -122,6 +124,7 @@ body::after {
 
 /* 搜索框 */
 .search-box {
+    cursor: default;
     background: rgba(240, 242, 245, var(--search-opacity, 0.95));
     border-radius: var(--search-radius, 50px);
     padding: calc(var(--search-height, 44px) * 0.15) calc(var(--search-height, 44px) * 0.35);
@@ -144,13 +147,32 @@ body::after {
     display: none;
 }
 
+.search-box.hidden ~ .search-suggestions,
+.search-box.hidden ~ .search-engine-dropdown-menu {
+    display: none;
+}
+
 .search-engine-selector {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font: inherit;
     display: flex;
     align-items: center;
     gap: 4px;
     position: relative;
     flex-shrink: 0;
     cursor: pointer;
+}
+
+.search-engine-selector:focus-visible {
+    outline: 2px solid #4285f4;
+    outline-offset: 4px;
+    border-radius: 4px;
+}
+
+.search-engine-selector svg {
+    pointer-events: none;
 }
 
 .search-engine-dropdown-toggle {
@@ -187,7 +209,13 @@ body::after {
 #search-input {
     border: none;
     background: transparent;
-    flex-grow: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    width: 0;
+    direction: ltr;
+    text-align: left;
+    user-select: text;
+    -webkit-user-select: text;
     font-size: calc(var(--search-height, 44px) * 0.35);
     outline: none;
     color: #333;
@@ -197,6 +225,54 @@ body::after {
 
 #search-input::placeholder {
     color: #aaa;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.search-suggestions {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 999;
+    max-height: min(360px, 45vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    list-style: none;
+    padding: 6px 0;
+    border-radius: 12px;
+    background: #fff;
+    color: #333;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    font-size: 15px;
+    text-shadow: none;
+}
+
+.search-suggestion {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    cursor: pointer;
+}
+
+.search-suggestion::before {
+    content: '';
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='1.7'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='m15 15 6 6'/%3E%3C/svg%3E");
+}
+
+.search-suggestion[aria-selected="true"] {
+    background: #edf2fc;
+    box-shadow: inset 3px 0 #4285f4;
+}
+
+.search-suggestion span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* 自定义下拉菜单 */

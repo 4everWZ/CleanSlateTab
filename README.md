@@ -1,7 +1,7 @@
 # new_tab_extension (Modular Refactor)
 
 This Chrome extension overrides the New Tab page and provides:
-- Search box with selectable engines
+- Search box with selectable engines and keyboard-accessible online suggestions
 - Wallpaper (local + remote sources)
 - Shortcuts grid with edit mode, icon editor, drag & drop
 - Settings sidebar (persisted via `chrome.storage.local`)
@@ -26,6 +26,7 @@ This Chrome extension overrides the New Tab page and provides:
  
  Features (UI behavior by area):
  - `src/features/search.js`: Search engine + submit behavior
+ - `src/features/searchSuggestions.js`: Suggestion list, keyboard/IME interactions, and lifecycle cleanup
  - `src/features/settingsPanel.js`: Settings sidebar UI + persistence
  - `src/features/shortcuts.js`: Shortcuts grid, edit mode, icon editor, DnD, pagination
  - `src/features/sidebar.js`: Sidebar toggling + layout wiring
@@ -37,6 +38,7 @@ This Chrome extension overrides the New Tab page and provides:
  - `src/utils/db.js`: IndexedDB wrapper for large asset storage (Wallpapers/Icons)
  - `src/utils/images.js`: Image formatting, compression, and analysis helpers
  - `src/utils/favicon.js`: Favicon URL generators
+ - `src/utils/searchSuggestions.js`: Suggestion providers, cancellable requests, and bounded memory cache
  - `src/utils/webdav.js`: WebDAV Client implementation
  
  UI glue:
@@ -48,6 +50,15 @@ This Chrome extension overrides the New Tab page and provides:
 - **Compatibility i18n**: `i18n.js` is isolated internally, but keeps `globalThis.t` / `setLanguage` for older callers.
 - **FOUC prevention**: UI is hidden until storage-backed settings have been applied (via `body.app-ready`).
 - **Icon resilience**: When choosing online icons, icons are cached as `data:` URLs to survive offline reloads.
+
+## Search suggestions
+
+- Google, Bing, and Baidu offer query suggestions from their own online services. Typing sends the query to the selected engine after a 180 ms debounce, without cookies or a referrer. The existing extension host permissions cover these requests; see [Chrome's extension networking documentation](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests).
+- The first row searches the original query. Use Up/Down to preview suggestions, Enter or a mouse click to search, Tab to accept a completion, and Escape to restore the original input and dismiss the list. Chinese IME composition does not request suggestions or submit a search until committed.
+- At most seven recommendations plus the original query are rendered. A new input cancels the previous request immediately; late responses cannot overwrite the current list. Requests time out after 3 seconds, with no polling or automatic retries.
+- Queries up to 200 characters are eligible for recommendations. Each page keeps at most 40 query results in memory for up to five minutes; queries are never written to extension storage. Clearing, losing focus, hiding, or leaving the page cancels pending work. Reinitializing search removes its previous listeners and cache.
+- These external suggestion endpoints may change or be unavailable. Network failures leave ordinary search available. Custom engines without a suggestion provider retain ordinary search; queries are not forwarded to a different engine. Suggestions do not include browser history, bookmarks, or open tabs.
+- Decorations and placeholders cannot be selected; typed text remains selectable. Clicking search-box padding focuses the input, with the caret at the start when empty.
 
 ## Development
 

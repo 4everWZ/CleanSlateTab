@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "CleanSlateTab",
   "version": "1.0",
-  "description": "简约、本地、无联网的自用新标签页",
+  "description": "简约自用新标签页，支持本地设置、壁纸与在线搜索建议",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },

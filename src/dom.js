@@ -23,6 +23,7 @@ export function getDom() {
         grid,
         sidebar,
         searchInput,
+        searchSuggestions: document.getElementById('search-suggestions'),
         searchEngineSelector,
         searchEngineDropdownMenu,
         searchTypes,

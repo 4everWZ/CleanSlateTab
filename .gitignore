@@ -1,3 +1,4 @@
 # Ignore _metadata directory
 _metadata/
 .vscode
+tmp/
