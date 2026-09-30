@@ -2,6 +2,8 @@ import { getFaviconUrl } from '../utils/favicon.js';
 import { checkImageTransparency, convertImageToDataUrl, dataURLToBlob, fetchImageBlob, compressImage } from '../utils/images.js';
 
 import { db, STORES_CONSTANTS } from '../utils/db.js';
+import { createWheelPager } from '../utils/wheelPaging.js';
+import { insertShortcutAt } from '../utils/shortcutOrder.js';
 
 function t(key) {
     return typeof window.t === 'function' ? window.t(key) : key;
@@ -30,49 +32,27 @@ export function setPage(ctx, pageIndex, options = {}) {
     const totalPages = getTotalPages(ctx);
     if (pageIndex < 0) pageIndex = 0;
     if (pageIndex >= totalPages) pageIndex = totalPages - 1;
+    if (pageIndex === ctx.state.currentPage) return;
 
     const grid = ctx.dom.grid;
-    if (options.animate && grid) {
-        // Prevent overlapping animations
-        if (grid._animating) return;
-        grid._animating = true;
+    // A new navigation supersedes the old animation. Never block navigation on
+    // transitionend: canceled/disabled CSS transitions may not emit that event.
+    grid?._pageAnimation?.cancel();
+    if (grid) grid._pageAnimation = null;
+    ctx.state.currentPage = pageIndex;
+    render(ctx);
+    if (!options.animate || !grid || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-        // Step 1: Instantly swap content and position off-screen (no animation)
-        grid.style.transition = 'none';
-        grid.style.willChange = 'transform';
-
-        // Update page and render new content
-        ctx.state.currentPage = pageIndex;
-        renderGrid(ctx);
-        renderPagination(ctx);
-
-        // Position content off-screen on the incoming side
-        const startPosition = options.direction === 'next' ? '100%' : '-100%';
-        grid.style.transform = `translateX(${startPosition})`;
-
-        // Force reflow to apply instant changes
-        void grid.offsetWidth;
-
-        // Step 2: Single smooth slide-in animation
-        grid.style.transition = `transform ${ANIMATION_DURATION}ms cubic-bezier(0.4, 0.0, 0.2, 1)`;
-        grid.style.transform = 'translateX(0)';
-
-        const onAnimationEnd = (e) => {
-            if (e.propertyName !== 'transform') return;
-            grid.removeEventListener('transitionend', onAnimationEnd);
-
-            // Clean up all animation styles
-            grid.style.willChange = '';
-            grid.style.transition = '';
-            grid.style.transform = '';
-            grid._animating = false;
-        };
-        grid.addEventListener('transitionend', onAnimationEnd);
-    } else {
-        ctx.state.currentPage = pageIndex;
-        renderGrid(ctx);
-        renderPagination(ctx);
-    }
+    const animation = grid.animate([
+        { transform: `translateX(${options.direction === 'next' ? '100%' : '-100%'})` },
+        { transform: 'translateX(0)' },
+    ], { duration: ANIMATION_DURATION, easing: 'cubic-bezier(0.4, 0.0, 0.2, 1)' });
+    grid._pageAnimation = animation;
+    const clearAnimation = () => {
+        if (grid._pageAnimation === animation) grid._pageAnimation = null;
+    };
+    // Handle completion AND cancellation immediately, without a fallback timer.
+    animation.finished.then(clearAnimation, clearAnimation);
 }
 
 export function renderPagination(ctx) {
@@ -81,6 +61,7 @@ export function renderPagination(ctx) {
 
     const { allApps, pageSize, currentPage } = ctx.state;
     const totalPages = Math.ceil((allApps.filter(a => a).length || 0) / (pageSize || 1));
+    const hadFocus = pagination.contains(document.activeElement);
 
     pagination.innerHTML = '';
 
@@ -96,10 +77,15 @@ export function renderPagination(ctx) {
     pagination.style.visibility = 'visible';
 
     for (let i = 0; i < totalPages; i++) {
-        const dot = document.createElement('span');
+        const dot = document.createElement('button');
+        dot.type = 'button';
         dot.className = 'dot';
         dot.dataset.page = String(i);
-        if (i === currentPage) dot.classList.add('active');
+        dot.setAttribute('aria-label', `Page ${i + 1}`);
+        if (i === currentPage) {
+            dot.classList.add('active');
+            dot.setAttribute('aria-current', 'page');
+        }
 
         dot.addEventListener('click', () => {
             const direction = i > currentPage ? 'next' : 'prev';
@@ -108,6 +94,7 @@ export function renderPagination(ctx) {
 
         pagination.appendChild(dot);
     }
+    if (hadFocus) pagination.querySelector('.active')?.focus({ preventScroll: true });
 }
 
 async function computeContentHash(blob) {
@@ -240,44 +227,35 @@ function _applyIconStyle(iconEl, url, defaultBg) {
 export function setupShortcutForm(ctx) {
     const { shortcutForm, iconTypeRadios } = ctx.dom;
 
-    // Wheel paging when cursor is inside the grid area.
+    // Wheel/trackpad paging belongs to the grid only; native scrolling elsewhere
+    // (suggestions, settings and modals) must remain untouched.
     ctx._handlers ||= {};
-    if (!ctx._handlers.onGridWheel) {
-        ctx._handlers.onGridWheel = (e) => {
-            // Only when the event originates from within the grid wrapper.
-            const gridWrapper = document.querySelector('.grid-wrapper');
-            if (!gridWrapper || !gridWrapper.contains(e.target)) return;
-
-            // Don't interfere with edit-mode dragging.
-            if (ctx.state.isEditMode && ctx.state.draggedItem) return;
-
+    ctx._handlers.gridWheelCleanup?.();
+    const gridWrapper = ctx.dom.grid?.closest('.grid-wrapper');
+    const wheelListeners = new AbortController();
+    const pager = createWheelPager({
+        getPageCount: () => getTotalPages(ctx),
+        isBlocked: () => ctx.state.draggedItem != null || ctx.state.draggedIndex != null,
+        onPage: (direction) => {
             const totalPages = getTotalPages(ctx);
             if (totalPages <= 1) return;
+            const nextPage = (ctx.state.currentPage + direction + totalPages) % totalPages;
+            setPage(ctx, nextPage, { direction: direction > 0 ? 'next' : 'prev', animate: true });
+        },
+    });
+    gridWrapper?.addEventListener('wheel', pager.handleWheel, { passive: false, signal: wheelListeners.signal });
+    ctx.dom.pagination?.addEventListener('pointerdown', (event) => {
+        // Empty space between the buttons is decoration, not a caret target.
+        if (event.target === ctx.dom.pagination && event.button === 0) event.preventDefault();
+    }, { signal: wheelListeners.signal });
+    window.addEventListener('pagehide', pager.reset, { signal: wheelListeners.signal });
+    document.addEventListener('visibilitychange', pager.reset, { signal: wheelListeners.signal });
+    ctx._handlers.gridWheelCleanup = () => {
+        wheelListeners.abort();
+        pager.reset();
+    };
 
-            // Throttle to avoid trackpad inertia flipping multiple pages.
-            const now = Date.now();
-            const last = ctx._handlers._lastWheelTs || 0;
-            if (now - last < 220) return;
-            ctx._handlers._lastWheelTs = now;
-
-            if (Math.abs(e.deltaY) < 8) return;
-            e.preventDefault();
-
-            if (e.deltaY > 0) {
-                // Next page with circular navigation
-                const nextPage = ctx.state.currentPage + 1 >= totalPages ? 0 : ctx.state.currentPage + 1;
-                setPage(ctx, nextPage, { direction: 'next', animate: true });
-            } else {
-                // Previous page with circular navigation
-                const prevPage = ctx.state.currentPage - 1 < 0 ? totalPages - 1 : ctx.state.currentPage - 1;
-                setPage(ctx, prevPage, { direction: 'prev', animate: true });
-            }
-        };
-
-        const gridWrapper = document.querySelector('.grid-wrapper');
-        gridWrapper?.addEventListener('wheel', ctx._handlers.onGridWheel, { passive: false });
-
-
+    if (!ctx._handlers._shortcutInputsAttached) {
         // URL parse - add listeners only once
         const urlInput = document.getElementById('app-url');
         const parseUrlBtn = document.getElementById('parse-url-btn');
@@ -410,6 +388,7 @@ export function setupShortcutForm(ctx) {
             reader.readAsDataURL(file);
         });
         ctx._handlers._appImageAttached = true;
+        ctx._handlers._shortcutInputsAttached = true;
     }
 
     // Submit - add listener only once
@@ -1150,6 +1129,7 @@ export function deleteApp(ctx, index) {
 
 
 function handleDragStart(ctx, e) {
+    clearDragState(ctx);
     const el = e.currentTarget;
     ctx.state.draggedItem = el;
     // Get global index directly from dataset
@@ -1161,11 +1141,15 @@ function handleDragStart(ctx, e) {
 }
 
 function handleDragOver(ctx, e) {
+    if (ctx.state.draggedIndex == null) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
 
     const el = e.currentTarget;
-    if (el !== ctx.state.draggedItem) el.classList.add('drag-over');
+    if (el !== ctx.state.draggedItem) {
+        el.dataset.dropSide = getDropSide(el, e.clientX);
+        el.classList.add('drag-over');
+    }
 
     // Edge auto-page while dragging
     if (ctx.state.isEditMode && ctx.state.draggedIndex != null) {
@@ -1206,7 +1190,7 @@ function maybeAutoPageOnEdge(ctx, clientX) {
             // Just entered left edge (or re-entered after page switch), start timing
             lastEdgeSide = 'left';
             edgeHoverStartTime = now;
-        } else if (!grid._animating && edgeHoverStartTime && now - edgeHoverStartTime >= hoverDelay) {
+        } else if (!grid._pageAnimation && edgeHoverStartTime && now - edgeHoverStartTime >= hoverDelay) {
             // Hovering for 500ms and not animating, trigger page switch
             setPage(ctx, currentPage - 1, { animate: true, direction: 'prev' });
             // Reset state so next detection treats it as fresh entry (re-flash highlight, restart timer)
@@ -1223,7 +1207,7 @@ function maybeAutoPageOnEdge(ctx, clientX) {
             // Just entered right edge (or re-entered after page switch), start timing
             lastEdgeSide = 'right';
             edgeHoverStartTime = now;
-        } else if (!grid._animating && edgeHoverStartTime && now - edgeHoverStartTime >= hoverDelay) {
+        } else if (!grid._pageAnimation && edgeHoverStartTime && now - edgeHoverStartTime >= hoverDelay) {
             // Hovering for 500ms and not animating, trigger page switch
             setPage(ctx, currentPage + 1, { animate: true, direction: 'next' });
             // Reset state so next detection treats it as fresh entry (re-flash highlight, restart timer)
@@ -1243,89 +1227,42 @@ function handleDragLeave(ctx, e) {
     e.currentTarget.classList.remove('drag-over');
 }
 
-function handleDrop(ctx, e) {
-    e.stopPropagation();
-
-    const el = e.currentTarget;
-    el.classList.remove('drag-over');
-
-    if (ctx.state.draggedItem !== el && ctx.state.draggedIndex != null) {
-        // Get global indices directly from dataset
-        const dropIdx = parseInt(el.dataset.globalIndex);
-        const dragIdx = ctx.state.draggedIndex;
-
-        if (dropIdx === dragIdx) {
-            return false;
-        }
-
-        // Filter out null values first
-        const validApps = ctx.state.allApps.filter(app => app !== null && app !== undefined);
-
-        // Swap using valid array
-        const temp = validApps[dragIdx];
-        validApps[dragIdx] = validApps[dropIdx];
-        validApps[dropIdx] = temp;
-
-        // Update main array with cleaned data
-        ctx.state.allApps = validApps;
-        ctx.actions.saveApps();
-
-        // Stay on current page (drop page)
-        renderGrid(ctx);
-        renderPagination(ctx);
-
-        // Animate the drop target
-        const localDropIndex = dropIdx % ctx.state.pageSize;
-        setTimeout(() => animateDropAtIndex(ctx, localDropIndex), 0);
-    }
-
-    return false;
+function getDropSide(el, clientX) {
+    const rect = el.getBoundingClientRect();
+    return clientX > rect.left + rect.width / 2 ? 'after' : 'before';
 }
 
-function handleDropOnEmpty(ctx, e, targetGlobalIndex) {
+function handleDrop(ctx, e) {
     e.stopPropagation();
     e.preventDefault();
-
-    const el = e.currentTarget;
-    el.classList.remove('drag-over');
-
-    if (ctx.state.draggedIndex != null) {
-        // For empty slots, we want to move (not swap)
-        const draggedItem = ctx.state.allApps[ctx.state.draggedIndex];
-
-        // Remove from original position
-        ctx.state.allApps.splice(ctx.state.draggedIndex, 1);
-
-        // Adjust target index if we removed an item before it
-        let adjustedTarget = targetGlobalIndex;
-        if (ctx.state.draggedIndex < targetGlobalIndex) {
-            adjustedTarget--;
-        }
-
-        // Insert at new position
-        ctx.state.allApps.splice(adjustedTarget, 0, draggedItem);
-
+    if (!ctx.state.isEditMode || ctx.state.draggedIndex == null) return false;
+    const targetIndex = Number(e.currentTarget.dataset.globalIndex);
+    const insertionIndex = targetIndex + (getDropSide(e.currentTarget, e.clientX) === 'after' ? 1 : 0);
+    const result = insertShortcutAt(ctx.state.allApps, ctx.state.draggedIndex, insertionIndex);
+    // Clear even when dropping back on the original position; native dragend may
+    // target a detached node after rendering or after an edge page transition.
+    clearDragState(ctx);
+    if (result) {
+        ctx.state.allApps = result.apps;
         ctx.actions.saveApps();
-
-        // Navigate to target page
-        const targetPage = Math.floor(adjustedTarget / ctx.state.pageSize);
-        if (targetPage !== ctx.state.currentPage) {
-            const direction = targetPage > ctx.state.currentPage ? 'next' : 'prev';
-            setPage(ctx, targetPage, { direction, animate: true });
-        } else {
-            renderGrid(ctx);
-            renderPagination(ctx);
-        }
+        ctx.state.currentPage = Math.floor(result.insertedIndex / ctx.state.pageSize);
+        render(ctx);
+        ctx.dom.grid.children[result.insertedIndex % ctx.state.pageSize]?.classList.add('drop-animate');
     }
-
     return false;
 }
 
 function handleDragEnd(ctx, e) {
     e.currentTarget.classList.remove('dragging');
+    clearDragState(ctx);
+}
 
+function clearDragState(ctx) {
+    ctx.state.draggedItem?.classList.remove('dragging');
     document.querySelectorAll('.app-item').forEach((item) => item.classList.remove('drag-over'));
-
+    ctx.dom.grid?.closest('.grid-wrapper')?.classList.remove('edge-highlight-left', 'edge-highlight-right');
+    edgeHoverStartTime = null;
+    lastEdgeSide = null;
     ctx.state.draggedItem = null;
     ctx.state.draggedIndex = null;
 }

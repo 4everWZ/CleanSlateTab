@@ -6,6 +6,24 @@ Run `node --test tests/searchSuggestions.test.mjs` with Node.js 22.13+ (no depen
 
 ## Manual Testing in Chrome
 
+### Trackpad regression checks
+
+Run `node --test tests/wheelPaging.test.mjs tests/shortcutOrder.test.mjs` (no extra dependencies). Tests cover wheel/trackpad heuristics including fractional/DPI-scaled mouse notches, continuous mouse scrolling, trackpad accidental-motion rejection, native vertical trackpad scrolling, horizontal paging, momentum, modifier/drag/single-page bypass, and insertion order with legacy gaps.
+
+With enough shortcuts for at least three pages, verify on a physical trackpad:
+- Over the grid, scroll horizontally with two fingers, including slow/small movements. One continuous gesture should turn at most one page; its momentum tail must not keep turning pages. Pause, then gesture again, including reversing direction and wrapping between the first/last page. Vertical two-finger scrolling must stay native without changing pages, including when a small initial delta accelerates into large deltas.
+- Confirm mouse-wheel paging over the grid works for individual notches, continuous rolling without pauses, and immediate reversal. Try normal and scaled displays/browser zoom, including mouse settings producing small or fractional pixel deltas. Continuous rolling must not latch after the first page; same-direction turns are capped at one per 160 ms. Pinch zoom and Ctrl+wheel must not change shortcut pages. A one-page grid must leave scrolling native.
+- Light horizontal displacement below 80 px, long micro-drift, and nearly diagonal two-finger motion must leave the grid stationary. A deliberate horizontal stroke reaching 80 px within 240 ms should page once; slow accidental movements must not accumulate across windows. Repeat these checks after a successful swipe, including a small reverse movement.
+- Tap controls and shortcuts; two-finger secondary-click a shortcut to enter edit mode. Drag D to the left half of B in `A B C D`: expect `A D B C`, not a swap. Drag A to the right half of the last item: expect `B C D A`. Check the blue insertion marker, both directions, cross-page drops, legacy empty slots, persistence after reload, and cancellation without a saved reorder. Drop feedback should animate without console errors, and paging should work after releasing the drag.
+- Scroll a populated search suggestion list with two fingers, then tap a visible result. Input focus should be preserved while scrolling, and the chosen result should search normally.
+- Scroll the settings sidebar independently. Neither sidebar nor suggestion scrolling should change shortcut pages.
+- Reinitialize shortcut setup repeatedly: paging must not multiply, and calling its `gridWheelCleanup` must detach its listeners. Switching tabs must discard a partially accumulated gesture.
+- Repeat same-direction horizontal swipes at least 12 times while the preceding momentum tail is still delivering events (no 200 ms idle gap), in both directions. Then reverse quickly without waiting for the slide animation. Each new swipe should work; one accelerating stroke with a long decaying tail, a single low sample, or a small tail spike must not cause extra turns.
+- Interrupt/cancel the grid animation (or hide the page during it), then page again. Navigation must remain available, with at most one grid animation. Repeat with CSS transitions disabled and with the OS/browser reduced-motion preference enabled; neither condition may leave paging locked.
+- Click and drag across pagination dots and their empty padding: no text selection or insertion caret should appear. Tab to a page button and activate it with Enter/Space; its active state and keyboard focus should remain correct after rendering.
+
+Browser automation can check equivalent wheel, pointer, secondary-click, and native drag events; it does not replace physical Windows/macOS trackpad testing for driver-specific timing and gesture settings.
+
 ### Step 1: Load Extension in Developer Mode
 1. Open Chrome and go to `chrome://extensions/`
 2. Enable "Developer mode" (toggle in top-right corner)

@@ -581,12 +581,17 @@ body::after {
 }
 
 .app-item.drag-over {
-    transform: scale(1.1);
-    animation: squeezeRotate 0.4s ease-in-out;
+    /* Mark the insertion boundary rather than implying an icon swap. */
+    box-shadow: -4px 0 0 #4285f4;
 }
 
 .app-item.drag-over .app-icon {
-    animation: squeeze 0.4s ease-in-out;
+    outline: 2px solid rgba(66, 133, 244, 0.5);
+    outline-offset: 4px;
+}
+
+.app-item.drag-over[data-drop-side="after"] {
+    box-shadow: 4px 0 0 #4285f4;
 }
 
 @keyframes iconFloat {
@@ -621,6 +626,10 @@ body::after {
 
 /* 翻页点 */
 .pagination {
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
+    cursor: default;
     display: flex;
     justify-content: center;
     gap: 8px;
@@ -630,6 +639,9 @@ body::after {
 }
 
 .dot {
+    border: 0;
+    padding: 0;
+    flex-shrink: 0;
     width: 10px;
     height: 10px;
     border-radius: 50%;
@@ -645,6 +657,11 @@ body::after {
 
 .dot:hover {
     background: rgba(255, 255, 255, 0.8);
+}
+
+.dot:focus-visible {
+    outline: 2px solid #4285f4;
+    outline-offset: 4px;
 }
 
 @keyframes dropPop {
